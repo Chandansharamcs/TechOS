@@ -516,6 +516,7 @@ body.theme-nature #mascot .m-orb-svg{animation:leafFloat 5s ease-in-out infinite
 @keyframes gradShift{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
 body.theme-gradient .hero{background-size:200% 200%;animation:gradShift 6s ease infinite}
 
+.cur-period{
   background:linear-gradient(135deg,rgba(108,99,255,0.18) 0%,rgba(0,212,170,0.1) 100%);
   border:1px solid rgba(108,99,255,0.35);border-radius:18px;
   padding:16px 18px;margin:0 14px 12px;
@@ -538,7 +539,11 @@ body.theme-gradient .hero{background-size:200% 200%;animation:gradShift 6s ease 
 .cur-period .cp-bar-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--a),var(--a3));
   transition:width 1s linear;}
 
-/* ══ ANIMATION POLISH ══ */
+/* ══ VOLUME SLIDER ══ */
+#amb-vol::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--a);cursor:pointer}
+#amb-vol::-webkit-slider-runnable-track{height:4px;border-radius:4px;background:var(--border)}
+#amb-vol::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:var(--a);border:none;cursor:pointer}
+
 /* Page transitions handled by existing .page/.page.active opacity+transform */
 
 /* Card hover lift */
@@ -937,6 +942,31 @@ body.theme-gradient .hero{background-size:200% 200%;animation:gradShift 6s ease 
   <div class="page" id="page-themes">
     <div class="topbar"><h2>Themes</h2><p>Customize your Tech OS experience</p></div>
     <div style="padding:0 14px 16px">
+
+      <!-- Sound Control Card -->
+      <div class="card" style="margin-bottom:14px">
+        <div class="card-label">🔊 Sound Settings</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div>
+            <div style="font-size:14px;font-weight:600">UI Click Sounds</div>
+            <div style="font-size:11px;color:var(--mut);margin-top:2px">Tab switches & interactions</div>
+          </div>
+          <button class="tog" id="tog-click-sound" onclick="toggleClickSound()"></button>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div>
+            <div style="font-size:14px;font-weight:600">Ambient Background</div>
+            <div style="font-size:11px;color:var(--mut);margin-top:2px" id="amb-desc">Changes with theme</div>
+          </div>
+          <button class="tog" id="tog-ambient" onclick="toggleAmbient()"></button>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="font-size:12px;color:var(--mut);flex-shrink:0">Volume</div>
+          <input type="range" id="amb-vol" min="0" max="100" value="30" oninput="setAmbientVolume(this.value)"
+            style="flex:1;height:4px;appearance:none;-webkit-appearance:none;background:var(--border);border-radius:4px;outline:none;padding:0;border:none">
+        </div>
+      </div>
+
       <div class="theme-grid" id="theme-grid"></div>
     </div>
   </div>
@@ -1507,7 +1537,7 @@ function timerToggle(){
     timerOn=true;document.getElementById('tbtn').textContent='Pause';
     timerInt=setInterval(()=>{
       if(isStopwatch){timerSec++;}
-      else{timerSec--;if(timerSec<=0){timerSec=0;clearInterval(timerInt);timerOn=false;document.getElementById('tbtn').textContent='Start';alert("⏰ Time's up!");}}
+      else{timerSec--;if(timerSec<=0){timerSec=0;clearInterval(timerInt);timerOn=false;document.getElementById('tbtn').textContent='Start';showBubble("⏰ Time's up! Great job! 💪",5000);}}
       updateTimerDisplay();
     },1000);
   }
@@ -1984,7 +2014,7 @@ window.addEventListener('load', function(){
   resize();draw();
 
   // first greeting
-  setTimeout(function(){showBubble("Hey Chandan! Welcome to Tech OS ✨",'excited');},1000);
+  setTimeout(function(){showBubble("Hey Chandan! Welcome to Tech OS ✨",4000);},1000);
 });
 
 
@@ -2095,7 +2125,7 @@ async function sendAI(){
     aiHistory.push({role:'model', parts:[{text:reply}]});
     if(aiHistory.length>20) aiHistory=aiHistory.slice(-20);
 
-    showBubble("The AI has spoken! 🤖",'excited');
+    showBubble("The AI has spoken! 🤖",3000);
 
   } catch(e){
     var thinkEl2=document.getElementById(thinkId);
@@ -2352,7 +2382,7 @@ function applyTheme(t, skipSave){
       minimal:"Clean & focused. Dev mode. ⬛",
       default:"Back to default! Classic vibes ⚡"
     };
-    showBubble(themeMsg[t.id]||'Theme applied! 🎨','excited');
+    showBubble(themeMsg[t.id]||'Theme applied! 🎨',4000);
   }
 }
 
@@ -2389,6 +2419,465 @@ function renderThemes(){
   if(saved) applyTheme(saved, true);
   activeThemeId = savedId;
 })();
+
+// ══════════════════════════════════════════
+// ══  SOUND ENGINE  ══════════════════════
+// ══════════════════════════════════════════
+
+var SFX = (function(){
+  var ctx = null;
+  var ambientNodes = [];  // currently playing ambient nodes
+  var ambientGain = null;
+  var masterGain  = null;
+  var clickOn  = DB.get('sfx_click')  !== false; // default ON
+  var ambOn    = DB.get('sfx_amb')    === true;  // default OFF
+  var ambVol   = DB.get('sfx_vol')    || 30;
+  var curThemeId = 'default';
+
+  function getCtx(){
+    if(!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if(ctx.state === 'suspended') ctx.resume();
+    return ctx;
+  }
+
+  // ── Click / UI sounds ──────────────────
+  // Each theme gets its own click character
+  var CLICK_SOUNDS = {
+    default:    function(c){ softClick(c, 800,  0.06, 'sine');   },
+    pixel:      function(c){ pixelBeep(c);                        },
+    cyberpunk:  function(c){ cyberClick(c);                       },
+    gradient:   function(c){ softClick(c, 1200, 0.05, 'sine');   },
+    glass:      function(c){ glassClick(c);                       },
+    minimal:    function(c){ softClick(c, 600,  0.05, 'square'); },
+    nature:     function(c){ natureClick(c);                      },
+    neon:       function(c){ neonLaser(c);                        },
+  };
+
+  function softClick(c, freq, vol, type){
+    var o = c.createOscillator();
+    var g = c.createGain();
+    o.connect(g); g.connect(masterGain);
+    o.type = type || 'sine';
+    o.frequency.setValueAtTime(freq, c.currentTime);
+    o.frequency.exponentialRampToValueAtTime(freq * 0.5, c.currentTime + 0.08);
+    g.gain.setValueAtTime(vol, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.09);
+    o.start(); o.stop(c.currentTime + 0.09);
+  }
+
+  function pixelBeep(c){
+    // Classic 8-bit two-tone
+    [880, 1320].forEach(function(f, i){
+      var o = c.createOscillator();
+      var g = c.createGain();
+      o.connect(g); g.connect(masterGain);
+      o.type = 'square';
+      o.frequency.value = f;
+      g.gain.setValueAtTime(0.04, c.currentTime + i*0.04);
+      g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + i*0.04 + 0.04);
+      o.start(c.currentTime + i*0.04);
+      o.stop(c.currentTime + i*0.04 + 0.04);
+    });
+  }
+
+  function cyberClick(c){
+    var o = c.createOscillator();
+    var g = c.createGain();
+    o.connect(g); g.connect(masterGain);
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(400, c.currentTime);
+    o.frequency.exponentialRampToValueAtTime(100, c.currentTime + 0.1);
+    g.gain.setValueAtTime(0.05, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.1);
+    o.start(); o.stop(c.currentTime + 0.1);
+  }
+
+  function glassClick(c){
+    // High pure sine — glass tap
+    var o = c.createOscillator();
+    var g = c.createGain();
+    o.connect(g); g.connect(masterGain);
+    o.type = 'sine';
+    o.frequency.value = 2200;
+    g.gain.setValueAtTime(0.04, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.25);
+    o.start(); o.stop(c.currentTime + 0.25);
+  }
+
+  function natureClick(c){
+    // Soft wood knock — noise burst
+    var buf = c.createBuffer(1, c.sampleRate * 0.06, c.sampleRate);
+    var d = buf.getChannelData(0);
+    for(var i=0;i<d.length;i++) d[i] = (Math.random()*2-1) * Math.exp(-i/500);
+    var src = c.createBufferSource();
+    var filt = c.createBiquadFilter();
+    var g = c.createGain();
+    filt.type = 'bandpass'; filt.frequency.value = 300;
+    src.buffer = buf;
+    src.connect(filt); filt.connect(g); g.connect(masterGain);
+    g.gain.value = 0.3;
+    src.start();
+  }
+
+  function neonLaser(c){
+    var o = c.createOscillator();
+    var g = c.createGain();
+    o.connect(g); g.connect(masterGain);
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(1800, c.currentTime);
+    o.frequency.exponentialRampToValueAtTime(200, c.currentTime + 0.12);
+    g.gain.setValueAtTime(0.05, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.12);
+    o.start(); o.stop(c.currentTime + 0.12);
+  }
+
+  // ── Ambient loop generators ─────────────
+  var AMBIENT = {
+    // default: warm layered pad — detuned sines + gentle noise shimmer
+    default: function(c, g){
+      var nodes = [];
+      // Layered detuned oscillators for a rich pad
+      var freqs = [110, 110.7, 165, 220, 220.5];
+      freqs.forEach(function(f, i){
+        var o = c.createOscillator();
+        var og = c.createGain();
+        o.type = 'sine';
+        o.frequency.value = f;
+        og.gain.value = 0.12 / (i * 0.5 + 1);
+        o.connect(og); og.connect(g);
+        o.start(); nodes.push(o);
+      });
+      // Subtle filtered noise breathe
+      var buf = c.createBuffer(1, c.sampleRate * 2, c.sampleRate);
+      var d = buf.getChannelData(0);
+      for(var i=0;i<d.length;i++) d[i] = (Math.random()*2-1);
+      var src = c.createBufferSource();
+      src.buffer = buf; src.loop = true;
+      var filt = c.createBiquadFilter();
+      filt.type = 'lowpass'; filt.frequency.value = 300;
+      var ng = c.createGain(); ng.gain.value = 0.04;
+      src.connect(filt); filt.connect(ng); ng.connect(g);
+      src.start(); nodes.push(src);
+      // Slow LFO tremolo
+      var lfo = c.createOscillator();
+      var lfoG = c.createGain();
+      lfo.frequency.value = 0.2; lfoG.gain.value = 0.025;
+      lfo.connect(lfoG); lfoG.connect(ng.gain);
+      lfo.start(); nodes.push(lfo);
+      return nodes;
+    },
+
+    // pixel: 8-bit chiptune arpeggio loop
+    pixel: function(c, g){
+      var nodes = [];
+      var notes = [261, 329, 392, 523, 392, 329];
+      var step = 0;
+      var o = c.createOscillator();
+      var og = c.createGain();
+      o.type = 'square';
+      og.gain.value = 0.03;
+      o.connect(og); og.connect(g);
+      o.frequency.value = notes[0];
+      o.start(); nodes.push(o);
+      // schedule arpeggio
+      var interval = setInterval(function(){
+        if(!o) return;
+        try{ o.frequency.setValueAtTime(notes[step % notes.length], c.currentTime); } catch(e){}
+        step++;
+      }, 180);
+      nodes._interval = interval;
+      return nodes;
+    },
+
+    // cyberpunk: industrial low hum + occasional glitch pulse
+    cyberpunk: function(c, g){
+      var nodes = [];
+      var o = c.createOscillator();
+      var og = c.createGain();
+      o.type = 'sawtooth';
+      o.frequency.value = 55;
+      og.gain.value = 0.025;
+      o.connect(og); og.connect(g);
+      o.start(); nodes.push(o);
+      // glitch pulse
+      var pulseInt = setInterval(function(){
+        if(Math.random() > 0.4) return;
+        var p = c.createOscillator();
+        var pg = c.createGain();
+        p.type = 'square'; p.frequency.value = 110 + Math.random()*440;
+        pg.gain.setValueAtTime(0.02, c.currentTime);
+        pg.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.08);
+        p.connect(pg); pg.connect(g);
+        p.start(); p.stop(c.currentTime + 0.08);
+      }, 600);
+      nodes._interval = pulseInt;
+      return nodes;
+    },
+
+    // gradient: clean airy pad — filtered noise + sine
+    gradient: function(c, g){
+      var nodes = [];
+      var buf = c.createBuffer(1, c.sampleRate * 2, c.sampleRate);
+      var d = buf.getChannelData(0);
+      for(var i=0;i<d.length;i++) d[i] = Math.random()*2-1;
+      var src = c.createBufferSource();
+      src.buffer = buf; src.loop = true;
+      var filt = c.createBiquadFilter();
+      filt.type = 'lowpass'; filt.frequency.value = 180;
+      var ng = c.createGain(); ng.gain.value = 0.04;
+      src.connect(filt); filt.connect(ng); ng.connect(g);
+      src.start(); nodes.push(src);
+      [220, 330].forEach(function(f){
+        var o = c.createOscillator();
+        var og2 = c.createGain();
+        o.type = 'sine'; o.frequency.value = f;
+        og2.gain.value = 0.015;
+        o.connect(og2); og2.connect(g);
+        o.start(); nodes.push(o);
+      });
+      return nodes;
+    },
+
+    // glass: high shimmer — filtered noise very bright
+    glass: function(c, g){
+      var nodes = [];
+      var buf = c.createBuffer(1, c.sampleRate * 2, c.sampleRate);
+      var d = buf.getChannelData(0);
+      for(var i=0;i<d.length;i++) d[i] = Math.random()*2-1;
+      var src = c.createBufferSource();
+      src.buffer = buf; src.loop = true;
+      var filt = c.createBiquadFilter();
+      filt.type = 'highpass'; filt.frequency.value = 3000;
+      var ng = c.createGain(); ng.gain.value = 0.018;
+      src.connect(filt); filt.connect(ng); ng.connect(g);
+      src.start(); nodes.push(src);
+      // bell-like sine pings
+      var pingInt = setInterval(function(){
+        if(Math.random() > 0.35) return;
+        var p = c.createOscillator();
+        var pg = c.createGain();
+        p.type = 'sine'; p.frequency.value = 1800 + Math.random()*800;
+        pg.gain.setValueAtTime(0.018, c.currentTime);
+        pg.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.5);
+        p.connect(pg); pg.connect(g);
+        p.start(); p.stop(c.currentTime + 0.5);
+      }, 1200);
+      nodes._interval = pingInt;
+      return nodes;
+    },
+
+    // minimal: pure silence almost — just very low sub sine
+    minimal: function(c, g){
+      var nodes = [];
+      var o = c.createOscillator();
+      var og = c.createGain();
+      o.type = 'sine'; o.frequency.value = 40;
+      og.gain.value = 0.03;
+      o.connect(og); og.connect(g);
+      o.start(); nodes.push(o);
+      return nodes;
+    },
+
+    // nature: rain — pink-ish filtered noise
+    nature: function(c, g){
+      var nodes = [];
+      var buf = c.createBuffer(1, c.sampleRate * 3, c.sampleRate);
+      var d = buf.getChannelData(0);
+      // pink noise approximation
+      var b0=0,b1=0,b2=0,b3=0,b4=0,b5=0,b6=0;
+      for(var i=0;i<d.length;i++){
+        var wh = Math.random()*2-1;
+        b0 = 0.99886*b0 + wh*0.0555179;
+        b1 = 0.99332*b1 + wh*0.0750759;
+        b2 = 0.96900*b2 + wh*0.1538520;
+        b3 = 0.86650*b3 + wh*0.3104856;
+        b4 = 0.55000*b4 + wh*0.5329522;
+        b5 = -0.7616*b5 - wh*0.0168980;
+        d[i] = (b0+b1+b2+b3+b4+b5+b6+wh*0.5362) * 0.11;
+        b6 = wh * 0.115926;
+      }
+      var src = c.createBufferSource();
+      src.buffer = buf; src.loop = true;
+      var filt = c.createBiquadFilter();
+      filt.type = 'bandpass'; filt.frequency.value = 1000; filt.Q.value = 0.5;
+      var ng = c.createGain(); ng.gain.value = 0.5;
+      src.connect(filt); filt.connect(ng); ng.connect(g);
+      src.start(); nodes.push(src);
+      return nodes;
+    },
+
+    // neon: synthwave — pulsing low bass + high shimmer
+    neon: function(c, g){
+      var nodes = [];
+      var bass = c.createOscillator();
+      var bg2 = c.createGain();
+      bass.type = 'sawtooth'; bass.frequency.value = 55;
+      bg2.gain.value = 0.03;
+      bass.connect(bg2); bg2.connect(g);
+      bass.start(); nodes.push(bass);
+      // pulse LFO
+      var lfo = c.createOscillator();
+      var lfoG = c.createGain();
+      lfo.frequency.value = 2; lfoG.gain.value = 0.015;
+      lfo.connect(lfoG); lfoG.connect(bg2.gain);
+      lfo.start(); nodes.push(lfo);
+      // high shimmer
+      var shimmer = c.createOscillator();
+      var shG = c.createGain();
+      shimmer.type = 'sine'; shimmer.frequency.value = 880;
+      shG.gain.value = 0.008;
+      shimmer.connect(shG); shG.connect(g);
+      shimmer.start(); nodes.push(shimmer);
+      return nodes;
+    },
+  };
+
+  function stopAmbient(){
+    ambientNodes.forEach(function(n){
+      if(n._interval) clearInterval(n._interval);
+      try{ if(n.stop) n.stop(); } catch(e){}
+    });
+    ambientNodes = [];
+  }
+
+  function startAmbient(themeId){
+    var c = getCtx();
+    stopAmbient();
+    if(!ambOn) return;
+    if(!ambientGain){
+      ambientGain = c.createGain();
+      ambientGain.connect(masterGain);
+    }
+    ambientGain.gain.setValueAtTime(0, c.currentTime);
+    var targetVol = ambVol <= 0 ? 0 : Math.pow(ambVol / 100, 2);
+    ambientGain.gain.linearRampToValueAtTime(targetVol, c.currentTime + 1.5);
+    var fn = AMBIENT[themeId] || AMBIENT['default'];
+    ambientNodes = fn(c, ambientGain);
+    // store interval refs
+    ambientNodes.forEach(function(n){ if(n._interval) ambientNodes._interval = n._interval; });
+  }
+
+  function init(){
+    var c = getCtx();
+    masterGain = c.createGain();
+    masterGain.gain.value = 1;
+    masterGain.connect(c.destination);
+  }
+
+  return {
+    init: init,
+
+    playClick: function(){
+      if(!clickOn) return;
+      try{
+        var c = getCtx();
+        if(!masterGain){ init(); }
+        var fn = CLICK_SOUNDS[curThemeId] || CLICK_SOUNDS['default'];
+        fn(c);
+      } catch(e){}
+    },
+
+    setTheme: function(id){
+      curThemeId = id;
+      if(ambOn) startAmbient(id);
+      // Update ambient desc
+      var descs = {
+        default:'Cosmic space hum', pixel:'8-bit chiptune loop',
+        cyberpunk:'Industrial drone + glitch', gradient:'Airy ambient pad',
+        glass:'Crystal shimmer + pings', minimal:'Sub bass hum',
+        nature:'Rain & nature sounds', neon:'Synthwave bass pulse'
+      };
+      var el = document.getElementById('amb-desc');
+      if(el) el.textContent = descs[id] || 'Changes with theme';
+    },
+
+    startAmbient: function(){ if(ambOn) startAmbient(curThemeId); },
+
+    stopAmbient: stopAmbient,
+
+    toggleClick: function(){
+      clickOn = !clickOn;
+      DB.set('sfx_click', clickOn);
+      return clickOn;
+    },
+
+    toggleAmb: function(){
+      ambOn = !ambOn;
+      DB.set('sfx_amb', ambOn);
+      if(ambOn){ var c=getCtx(); if(!masterGain) init(); startAmbient(curThemeId); }
+      else { stopAmbient(); }
+      return ambOn;
+    },
+
+    setVol: function(v){
+      ambVol = v;
+      DB.set('sfx_vol', v);
+      if(ambientGain && ctx){
+        var scaled = v <= 0 ? 0 : Math.pow(v / 100, 2);
+        ambientGain.gain.setTargetAtTime(scaled, ctx.currentTime, 0.15);
+      }
+      var sl = document.getElementById('amb-vol');
+      if(sl) sl.style.background = 'linear-gradient(to right, var(--a) '+v+'%, var(--border) '+v+'%)';
+    },
+
+    isClickOn: function(){ return clickOn; },
+    isAmbOn:   function(){ return ambOn; },
+    getVol:    function(){ return ambVol; }
+  };
+})();
+
+// ── Sound toggle UI functions ──
+function toggleClickSound(){
+  var on = SFX.toggleClick();
+  var tog = document.getElementById('tog-click-sound');
+  if(tog) tog.classList.toggle('on', on);
+  if(on) SFX.playClick();
+}
+
+function toggleAmbient(){
+  var on = SFX.toggleAmb();
+  var tog = document.getElementById('tog-ambient');
+  if(tog) tog.classList.toggle('on', on);
+}
+
+function setAmbientVolume(v){
+  SFX.setVol(parseInt(v));
+}
+
+// ── Hook into goPage for click sounds ──
+(function(){
+  var _gp2 = goPage;
+  goPage = function(id, btn){
+    SFX.playClick();
+    _gp2(id, btn);
+  };
+})();
+
+// ── Hook into applyTheme to update sound engine ──
+(function(){
+  var _at = applyTheme;
+  applyTheme = function(t, skipSave){
+    _at(t, skipSave);
+    SFX.setTheme(t.id);
+  };
+})();
+
+// ── Init sound on first user interaction ──
+document.addEventListener('click', function onFirstClick(){
+  SFX.init();
+  document.removeEventListener('click', onFirstClick);
+}, { once: true });
+
+// ── Restore UI state on load ──
+document.addEventListener('DOMContentLoaded', function(){
+  var togClick = document.getElementById('tog-click-sound');
+  var togAmb   = document.getElementById('tog-ambient');
+  var volSlider = document.getElementById('amb-vol');
+  if(togClick) togClick.classList.toggle('on', SFX.isClickOn());
+  if(togAmb)   togAmb.classList.toggle('on', SFX.isAmbOn());
+  if(volSlider){ volSlider.value = SFX.getVol(); volSlider.style.background = 'linear-gradient(to right, var(--a) '+SFX.getVol()+'%, var(--border) '+SFX.getVol()+'%)'; }
+  SFX.setTheme(DB.get('themeId') || 'default');
+});
 
 </script>
 
